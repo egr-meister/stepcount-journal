@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+/android
+/ios
+*.orig.*
+
+# Metro
+.metro-health-check*
+
+# Debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+
+# Keystore / signing secrets (NEVER commit these)
+*.p12
+*.keystore
+*.jks
+keystore.properties
+release.keystore
+stepcount-journal-release-key.p12
+
+# Build outputs
+*.apk
+*.aab

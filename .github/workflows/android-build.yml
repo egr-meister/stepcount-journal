@@ -1,0 +1,141 @@
+name: Android Build (APK + AAB)
+
+# Builds a signed release APK and AAB on every push to main.
+# Signing material is provided through GitHub Secrets (never committed):
+#   ANDROID_KEYSTORE_BASE64  - base64 of the PKCS12 (.p12) keystore
+#   ANDROID_KEYSTORE_PASSWORD - keystore password (same as key password)
+#   ANDROID_KEY_ALIAS         - key alias inside the keystore
+#   ANDROID_KEY_PASSWORD      - key password (same as keystore password)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build signed Android release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK Platform 35 and Build Tools 35.0.0
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Align Expo dependency versions
+        run: npx expo install --fix
+
+      - name: Expo Doctor
+        run: npx expo-doctor || true
+
+      - name: Check Expo dependency versions
+        run: npx expo install --check || true
+
+      - name: Prebuild Android project
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Decode release keystore from secrets
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          mkdir -p android/app/keystore
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/keystore/release.p12
+
+      - name: Configure signing (gradle.properties)
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          {
+            echo "RELEASE_STORE_FILE=keystore/release.p12"
+            echo "RELEASE_STORE_PASSWORD=${ANDROID_KEYSTORE_PASSWORD}"
+            echo "RELEASE_KEY_ALIAS=${ANDROID_KEY_ALIAS}"
+            echo "RELEASE_KEY_PASSWORD=${ANDROID_KEY_PASSWORD}"
+          } >> android/gradle.properties
+
+      - name: Inject release signing config into build.gradle
+        run: |
+          python3 - <<'PY'
+          import re, io, os
+          path = "android/app/build.gradle"
+          with io.open(path, "r", encoding="utf-8") as f:
+              gradle = f.read()
+
+          signing_block = '''
+        release {
+            if (project.hasProperty('RELEASE_STORE_FILE')) {
+                storeFile file(RELEASE_STORE_FILE)
+                storePassword RELEASE_STORE_PASSWORD
+                keyAlias RELEASE_KEY_ALIAS
+                keyPassword RELEASE_KEY_PASSWORD
+                storeType "PKCS12"
+            }
+        }
+'''
+          # Add a release signingConfig next to the default debug one.
+          if "signingConfigs {" in gradle and "release {" not in gradle.split("signingConfigs {")[1].split("}")[0]:
+              gradle = gradle.replace(
+                  "signingConfigs {",
+                  "signingConfigs {" + signing_block,
+                  1,
+              )
+
+          # Point the release buildType at the release signing config.
+          gradle = re.sub(
+              r"(buildTypes\s*\{\s*release\s*\{)",
+              r"\1\n            signingConfig signingConfigs.release",
+              gradle,
+              count=1,
+          )
+
+          with io.open(path, "w", encoding="utf-8") as f:
+              f.write(gradle)
+          print("Patched android/app/build.gradle with release signing config.")
+          PY
+
+      - name: Build signed release APK
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Build signed release AAB
+        working-directory: android
+        run: ./gradlew bundleRelease --no-daemon
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stepcount-journal-release-apk
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      - name: Upload AAB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stepcount-journal-release-aab
+          path: android/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
