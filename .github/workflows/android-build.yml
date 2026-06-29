@@ -80,43 +80,40 @@ jobs:
 
       - name: Inject release signing config into build.gradle
         run: |
-          python3 - <<'PY'
-          import re, io, os
-          path = "android/app/build.gradle"
-          with io.open(path, "r", encoding="utf-8") as f:
-              gradle = f.read()
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = 'android/app/build.gradle';
+          let gradle = fs.readFileSync(path, 'utf8');
 
-          signing_block = '''
-        release {
-            if (project.hasProperty('RELEASE_STORE_FILE')) {
-                storeFile file(RELEASE_STORE_FILE)
-                storePassword RELEASE_STORE_PASSWORD
-                keyAlias RELEASE_KEY_ALIAS
-                keyPassword RELEASE_KEY_PASSWORD
-                storeType "PKCS12"
-            }
-        }
-'''
-          # Add a release signingConfig next to the default debug one.
-          if "signingConfigs {" in gradle and "release {" not in gradle.split("signingConfigs {")[1].split("}")[0]:
-              gradle = gradle.replace(
-                  "signingConfigs {",
-                  "signingConfigs {" + signing_block,
-                  1,
-              )
+          const signingBlock = [
+            '        release {',
+            "            if (project.hasProperty('RELEASE_STORE_FILE')) {",
+            '                storeFile file(RELEASE_STORE_FILE)',
+            '                storePassword RELEASE_STORE_PASSWORD',
+            '                keyAlias RELEASE_KEY_ALIAS',
+            '                keyPassword RELEASE_KEY_PASSWORD',
+            '                storeType "PKCS12"',
+            '            }',
+            '        }',
+            '',
+          ].join('\n');
 
-          # Point the release buildType at the release signing config.
-          gradle = re.sub(
-              r"(buildTypes\s*\{\s*release\s*\{)",
-              r"\1\n            signingConfig signingConfigs.release",
-              gradle,
-              count=1,
-          )
+          // 1) Add a "release" signingConfig next to the default "debug" one.
+          if (gradle.includes('signingConfigs {') && !gradle.includes('signingConfigs.release')) {
+            gradle = gradle.replace('signingConfigs {', 'signingConfigs {\n' + signingBlock);
+          }
 
-          with io.open(path, "w", encoding="utf-8") as f:
-              f.write(gradle)
-          print("Patched android/app/build.gradle with release signing config.")
-          PY
+          // 2) Point ONLY the release buildType at the release signing config.
+          //    The default template sets it to signingConfigs.debug — replace that
+          //    specific occurrence (the first one after "buildTypes { ... release {").
+          gradle = gradle.replace(
+            /(buildTypes[\s\S]*?release\s*\{[\s\S]*?signingConfig\s+)signingConfigs\.debug/,
+            '$1signingConfigs.release'
+          );
+
+          fs.writeFileSync(path, gradle);
+          console.log('Patched android/app/build.gradle release signing config.');
+          NODE
 
       - name: Build signed release APK
         working-directory: android
