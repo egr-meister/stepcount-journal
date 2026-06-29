@@ -71,6 +71,10 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          # The generated gradle.properties may not end with a trailing
+          # newline; start on a fresh line so we don't corrupt the last
+          # existing property (e.g. android.buildToolsVersion).
+          printf '\n' >> android/gradle.properties
           {
             echo "RELEASE_STORE_FILE=keystore/release.p12"
             echo "RELEASE_STORE_PASSWORD=${ANDROID_KEYSTORE_PASSWORD}"
